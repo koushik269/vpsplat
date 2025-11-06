@@ -6,6 +6,7 @@ pipeline {
         IMAGE_TAG = "latest"
         DEV_SERVER = "10.69.69.81"
         HOST_PORT = "8080"
+        NVM_DIR = "${WORKSPACE}/.nvm"
     }
 
     stages {
@@ -16,12 +17,22 @@ pipeline {
             }
         }
 
-        stage('Install Node 20') {
+        stage('Setup Node 20') {
             steps {
-                echo "🟢 Installing Node.js 20 on agent..."
+                echo "🟢 Installing Node.js 20 using NVM..."
                 sh '''
-                    curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
-                    apt-get install -y nodejs
+                    # Install NVM
+                    export NVM_DIR=${NVM_DIR}
+                    mkdir -p $NVM_DIR
+                    curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh | bash
+
+                    # Load NVM
+                    . "$NVM_DIR/nvm.sh"
+
+                    # Install and use Node 20
+                    nvm install 20
+                    nvm use 20
+
                     node -v
                     npm -v
                 '''
@@ -33,6 +44,9 @@ pipeline {
                 dir('vps-app') {
                     echo "🏗️ Building Vite React app..."
                     sh '''
+                        export NVM_DIR=${NVM_DIR}
+                        . "$NVM_DIR/nvm.sh"
+                        nvm use 20
                         npm install
                         npm run build
                     '''
@@ -68,10 +82,8 @@ pipeline {
                 echo "🚀 Deploying to Dev Server (${DEV_SERVER})..."
                 sshagent (credentials: ['lubuntukey']) {
                     sh '''
-                        # Save image and send to dev server
                         docker save ${APP_NAME}:${IMAGE_TAG} | bzip2 | ssh -o StrictHostKeyChecking=no root@${DEV_SERVER} 'bunzip2 | docker load'
 
-                        # Restart container
                         ssh -o StrictHostKeyChecking=no root@${DEV_SERVER} "
                             docker stop ${APP_NAME} || true
                             docker rm ${APP_NAME} || true
@@ -85,7 +97,7 @@ pipeline {
 
     post {
         success {
-            echo "✅ Successfully deployed to Dev Server (${DEV_SERVER})!"
+            echo "✅ Successfully deployed to Dev (${DEV_SERVER})!"
         }
         failure {
             echo "❌ Deployment failed!"
