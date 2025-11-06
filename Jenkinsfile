@@ -5,7 +5,7 @@ pipeline {
         APP_NAME = "devops-frontend"
         IMAGE_TAG = "latest"
         DEV_SERVER = "10.69.69.81"
-        HOST_PORT = "8080"
+        HOST_PORT = "80"
         NVM_DIR = "${WORKSPACE}/.nvm"
         REMOTE_PATH = "/root/devops-build"
     }
