@@ -1,0 +1,123 @@
+pipeline {
+    agent { label 'lbuubntu' }
+
+    environment {
+        APP_NAME = "devops-frontend"
+        IMAGE_TAG = "latest"
+        DEV_SERVER = "10.69.69.81"
+        PROD_SERVER = "157.250.198.126"
+        DEV_PORT = "8080"
+        PROD_PORT = "80"
+        NVM_DIR = "${WORKSPACE}/.nvm"
+        REMOTE_PATH = "/root/devops-build"
+    }
+
+    stages {
+        // ---------------------------
+        // 1. Checkout + Build
+        // ---------------------------
+        stage('Checkout') {
+            steps {
+                echo "🔄 Checking out code..."
+                checkout scm
+            }
+        }
+
+        stage('Setup Node 20') {
+            steps {
+                echo "🟢 Installing Node.js 20 using NVM..."
+                sh '''
+                    export NVM_DIR=${NVM_DIR}
+                    mkdir -p $NVM_DIR
+                    curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh | bash
+                    . "$NVM_DIR/nvm.sh"
+                    nvm install 20
+                    nvm use 20
+                    node -v
+                    npm -v
+                '''
+            }
+        }
+
+        stage('Build Frontend') {
+            steps {
+                dir('vps-app') {
+                    echo "🏗️ Building Vite React app..."
+                    sh '''
+                        export NVM_DIR=${NVM_DIR}
+                        . "$NVM_DIR/nvm.sh"
+                        nvm use 20
+                        npm install
+                        npm run build
+                    '''
+                }
+            }
+        }
+
+        // ---------------------------
+        // 2. Deploy to DEV
+        // ---------------------------
+        stage('Deploy to Dev Server') {
+            steps {
+                sshagent (credentials: ['lubuntukey']) {
+                    echo "🚀 Deploying to Dev Server (${DEV_SERVER})..."
+                    sh '''
+                        ssh -o StrictHostKeyChecking=no root@${DEV_SERVER} "rm -rf ${REMOTE_PATH} && mkdir -p ${REMOTE_PATH}"
+                        scp -o StrictHostKeyChecking=no -r vps-app/dist root@${DEV_SERVER}:${REMOTE_PATH}/
+
+                        ssh -o StrictHostKeyChecking=no root@${DEV_SERVER} "
+                            cd ${REMOTE_PATH} &&
+                            printf 'FROM nginx:alpine\\nCOPY dist /usr/share/nginx/html\\nEXPOSE 80\\nCMD [\\"nginx\\", \\"-g\\", \\"daemon off;\\"]\\n' > Dockerfile &&
+                            docker build -t ${APP_NAME}:${IMAGE_TAG} . &&
+                            docker stop ${APP_NAME} || true &&
+                            docker rm ${APP_NAME} || true &&
+                            docker run -d --name ${APP_NAME} -p ${DEV_PORT}:80 ${APP_NAME}:${IMAGE_TAG}
+                        "
+                    '''
+                }
+            }
+        }
+
+        // ---------------------------
+        // 3. Manual Approval Gate
+        // ---------------------------
+        stage('Approve Production Deployment') {
+            steps {
+                input message: "✅ Deploy to Production (${PROD_SERVER})?", ok: "Deploy Now"
+            }
+        }
+
+        // ---------------------------
+        // 4. Deploy to PROD
+        // ---------------------------
+        stage('Deploy to Production Server') {
+            steps {
+                sshagent (credentials: ['lubuntukey']) {
+                    echo "🚀 Deploying to Production Server (${PROD_SERVER})..."
+                    sh '''
+                        ssh -o StrictHostKeyChecking=no root@${PROD_SERVER} "rm -rf ${REMOTE_PATH} && mkdir -p ${REMOTE_PATH}"
+                        scp -o StrictHostKeyChecking=no -r vps-app/dist root@${PROD_SERVER}:${REMOTE_PATH}/
+
+                        ssh -o StrictHostKeyChecking=no root@${PROD_SERVER} "
+                            cd ${REMOTE_PATH} &&
+                            printf 'FROM nginx:alpine\\nCOPY dist /usr/share/nginx/html\\nEXPOSE 80\\nCMD [\\"nginx\\", \\"-g\\", \\"daemon off;\\"]\\n' > Dockerfile &&
+                            docker build -t ${APP_NAME}:${IMAGE_TAG} . &&
+                            docker stop ${APP_NAME} || true &&
+                            docker rm ${APP_NAME} || true &&
+                            docker run -d --name ${APP_NAME} -p ${PROD_PORT}:80 ${APP_NAME}:${IMAGE_TAG}
+                        "
+                    '''
+                }
+            }
+        }
+    }
+
+    post {
+        success {
+            echo "✅ Deployment completed successfully on Production (${PROD_SERVER})!"
+        }
+        failure {
+            echo "❌ Deployment failed!"
+        }
+    }
+}
