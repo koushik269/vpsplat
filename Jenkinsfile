@@ -68,17 +68,13 @@ pipeline {
                     sh '''
                         ssh -o StrictHostKeyChecking=no root@${DEV_SERVER} "
                             cd ${REMOTE_PATH} &&
-                            cat > Dockerfile <<'EOF'
-                            FROM nginx:alpine
-                            COPY dist /usr/share/nginx/html
-                            EXPOSE 80
-                            CMD ['nginx', '-g', 'daemon off;']
-                            EOF
-
-                            docker build -t ${APP_NAME}:${IMAGE_TAG} .
-                            docker stop ${APP_NAME} || true
-                            docker rm ${APP_NAME} || true
-                            docker run -d --name ${APP_NAME} -p ${HOST_PORT}:80 ${APP_NAME}:${IMAGE_TAG}
+                            printf 'FROM nginx:alpine\\nCOPY dist /usr/share/nginx/html\\nEXPOSE 80\\nCMD [\\"nginx\\", \\"-g\\", \\"daemon off;\\"]\\n' > Dockerfile &&
+                            docker build -t ${APP_NAME}:${IMAGE_TAG} . &&
+                            docker stop ${APP_NAME} || true &&
+                            docker rm ${APP_NAME} || true &&
+                            docker run -d --name ${APP_NAME} -p ${HOST_PORT}:80 ${APP_NAME}:${IMAGE_TAG} &&
+                            sleep 3 &&
+                            docker ps --filter name=${APP_NAME}
                         "
                     '''
                 }
