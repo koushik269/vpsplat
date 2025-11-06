@@ -19,20 +19,14 @@ pipeline {
 
         stage('Setup Node 20') {
             steps {
-                echo "🟢 Installing Node.js 20 using NVM..."
+                echo "🟢 Installing Node.js 20 via NVM..."
                 sh '''
-                    # Install NVM
                     export NVM_DIR=${NVM_DIR}
                     mkdir -p $NVM_DIR
                     curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh | bash
-
-                    # Load NVM
                     . "$NVM_DIR/nvm.sh"
-
-                    # Install and use Node 20
                     nvm install 20
                     nvm use 20
-
                     node -v
                     npm -v
                 '''
@@ -58,6 +52,12 @@ pipeline {
             steps {
                 echo "🐳 Building Docker image..."
                 sh '''
+                    if ! command -v docker &>/dev/null; then
+                        echo "❌ Docker not installed or not accessible on Jenkins agent!"
+                        exit 1
+                    fi
+
+                    echo "✅ Docker is available."
                     cat > Dockerfile <<'EOF'
                     FROM node:20-alpine AS build
                     WORKDIR /app
@@ -72,7 +72,9 @@ pipeline {
                     CMD ["nginx", "-g", "daemon off;"]
                     EOF
 
+                    echo "🚧 Building image ${APP_NAME}:${IMAGE_TAG}..."
                     docker build -t ${APP_NAME}:${IMAGE_TAG} .
+                    docker images | grep ${APP_NAME} || (echo "❌ Docker image not found after build!" && exit 1)
                 '''
             }
         }
@@ -82,8 +84,10 @@ pipeline {
                 echo "🚀 Deploying to Dev Server (${DEV_SERVER})..."
                 sshagent (credentials: ['lubuntukey']) {
                     sh '''
+                        echo "📦 Exporting Docker image and sending to dev server..."
                         docker save ${APP_NAME}:${IMAGE_TAG} | bzip2 | ssh -o StrictHostKeyChecking=no root@${DEV_SERVER} 'bunzip2 | docker load'
 
+                        echo "♻️ Restarting container on dev server..."
                         ssh -o StrictHostKeyChecking=no root@${DEV_SERVER} "
                             docker stop ${APP_NAME} || true
                             docker rm ${APP_NAME} || true
