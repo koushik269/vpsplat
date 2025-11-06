@@ -1,5 +1,5 @@
 pipeline {
-    agent any
+    agent { label 'lbuubntu' }
 
     environment {
         APP_NAME = "devops-frontend"
@@ -13,6 +13,18 @@ pipeline {
             steps {
                 echo "🔄 Checking out code..."
                 checkout scm
+            }
+        }
+
+        stage('Install Node 20') {
+            steps {
+                echo "🟢 Installing Node.js 20 on agent..."
+                sh '''
+                    curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+                    apt-get install -y nodejs
+                    node -v
+                    npm -v
+                '''
             }
         }
 
@@ -33,7 +45,7 @@ pipeline {
                 echo "🐳 Building Docker image..."
                 sh '''
                     cat > Dockerfile <<'EOF'
-                    FROM node:18-alpine AS build
+                    FROM node:20-alpine AS build
                     WORKDIR /app
                     COPY vps-app/package*.json ./
                     RUN npm install
@@ -54,14 +66,12 @@ pipeline {
         stage('Deploy to Dev Server') {
             steps {
                 echo "🚀 Deploying to Dev Server (${DEV_SERVER})..."
-
-                // Use Jenkins SSH credentials named 'lubuntukey'
                 sshagent (credentials: ['lubuntukey']) {
                     sh '''
-                        # Transfer docker image
+                        # Save image and send to dev server
                         docker save ${APP_NAME}:${IMAGE_TAG} | bzip2 | ssh -o StrictHostKeyChecking=no root@${DEV_SERVER} 'bunzip2 | docker load'
 
-                        # Stop old container & start new one
+                        # Restart container
                         ssh -o StrictHostKeyChecking=no root@${DEV_SERVER} "
                             docker stop ${APP_NAME} || true
                             docker rm ${APP_NAME} || true
@@ -75,7 +85,7 @@ pipeline {
 
     post {
         success {
-            echo "✅ Successfully deployed to Dev (${DEV_SERVER})!"
+            echo "✅ Successfully deployed to Dev Server (${DEV_SERVER})!"
         }
         failure {
             echo "❌ Deployment failed!"
