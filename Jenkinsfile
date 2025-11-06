@@ -7,6 +7,7 @@ pipeline {
         DEV_SERVER = "10.69.69.81"
         HOST_PORT = "8080"
         NVM_DIR = "${WORKSPACE}/.nvm"
+        REMOTE_PATH = "/root/devops-build"
     }
 
     stages {
@@ -19,7 +20,7 @@ pipeline {
 
         stage('Setup Node 20') {
             steps {
-                echo "🟢 Installing Node.js 20 via NVM..."
+                echo "🟢 Installing Node.js 20 using NVM..."
                 sh '''
                     export NVM_DIR=${NVM_DIR}
                     mkdir -p $NVM_DIR
@@ -48,47 +49,33 @@ pipeline {
             }
         }
 
-        stage('Build Docker Image') {
+        stage('Send Build to Dev Server') {
             steps {
-                echo "🐳 Building Docker image..."
-                sh '''
-                    if ! command -v docker &>/dev/null; then
-                        echo "❌ Docker not installed or not accessible on Jenkins agent!"
-                        exit 1
-                    fi
-
-                    echo "✅ Docker is available."
-                    cat > Dockerfile <<'EOF'
-                    FROM node:20-alpine AS build
-                    WORKDIR /app
-                    COPY vps-app/package*.json ./
-                    RUN npm install
-                    COPY vps-app/ .
-                    RUN npm run build
-
-                    FROM nginx:alpine
-                    COPY --from=build /app/dist /usr/share/nginx/html
-                    EXPOSE 80
-                    CMD ["nginx", "-g", "daemon off;"]
-                    EOF
-
-                    echo "🚧 Building image ${APP_NAME}:${IMAGE_TAG}..."
-                    docker build -t ${APP_NAME}:${IMAGE_TAG} .
-                    docker images | grep ${APP_NAME} || (echo "❌ Docker image not found after build!" && exit 1)
-                '''
+                sshagent (credentials: ['lubuntukey']) {
+                    echo "📦 Sending build files to Dev Server (${DEV_SERVER})..."
+                    sh '''
+                        ssh -o StrictHostKeyChecking=no root@${DEV_SERVER} "rm -rf ${REMOTE_PATH} && mkdir -p ${REMOTE_PATH}"
+                        scp -o StrictHostKeyChecking=no -r vps-app/dist root@${DEV_SERVER}:${REMOTE_PATH}/
+                    '''
+                }
             }
         }
 
-        stage('Deploy to Dev Server') {
+        stage('Build & Deploy Docker on Dev Server') {
             steps {
-                echo "🚀 Deploying to Dev Server (${DEV_SERVER})..."
                 sshagent (credentials: ['lubuntukey']) {
+                    echo "🐳 Building Docker image on Dev Server..."
                     sh '''
-                        echo "📦 Exporting Docker image and sending to dev server..."
-                        docker save ${APP_NAME}:${IMAGE_TAG} | bzip2 | ssh -o StrictHostKeyChecking=no root@${DEV_SERVER} 'bunzip2 | docker load'
-
-                        echo "♻️ Restarting container on dev server..."
                         ssh -o StrictHostKeyChecking=no root@${DEV_SERVER} "
+                            cd ${REMOTE_PATH} &&
+                            cat > Dockerfile <<'EOF'
+                            FROM nginx:alpine
+                            COPY dist /usr/share/nginx/html
+                            EXPOSE 80
+                            CMD ['nginx', '-g', 'daemon off;']
+                            EOF
+
+                            docker build -t ${APP_NAME}:${IMAGE_TAG} .
                             docker stop ${APP_NAME} || true
                             docker rm ${APP_NAME} || true
                             docker run -d --name ${APP_NAME} -p ${HOST_PORT}:80 ${APP_NAME}:${IMAGE_TAG}
@@ -101,7 +88,7 @@ pipeline {
 
     post {
         success {
-            echo "✅ Successfully deployed to Dev (${DEV_SERVER})!"
+            echo "✅ Successfully deployed on Dev Server (${DEV_SERVER})!"
         }
         failure {
             echo "❌ Deployment failed!"
