@@ -2,47 +2,72 @@ pipeline {
     agent any
 
     environment {
-        IMAGE_NAME = "vps-portal"
-        IMAGE_TAG = "dev"
+        APP_NAME = "devops-frontend"
+        IMAGE_TAG = "latest"
         DEV_SERVER = "10.69.69.81"
-        SSH_CRED = "lubuntukey"  // Jenkins credential ID for SSH key or username/password
+        HOST_PORT = "8080"
     }
 
     stages {
         stage('Checkout') {
             steps {
+                echo "🔄 Checking out code..."
                 checkout scm
+            }
+        }
+
+        stage('Build Frontend') {
+            steps {
+                dir('vps-app') {
+                    echo "🏗️ Building Vite React app..."
+                    sh '''
+                        npm install
+                        npm run build
+                    '''
+                }
             }
         }
 
         stage('Build Docker Image') {
             steps {
-                dir('vps-app') {
-                    script {
-                        sh """
-                        echo "Building Docker image..."
-                        docker build -t ${IMAGE_NAME}:${IMAGE_TAG} .
-                        """
-                    }
-                }
+                echo "🐳 Building Docker image..."
+                sh '''
+                    cat > Dockerfile <<'EOF'
+                    FROM node:18-alpine AS build
+                    WORKDIR /app
+                    COPY vps-app/package*.json ./
+                    RUN npm install
+                    COPY vps-app/ .
+                    RUN npm run build
+
+                    FROM nginx:alpine
+                    COPY --from=build /app/dist /usr/share/nginx/html
+                    EXPOSE 80
+                    CMD ["nginx", "-g", "daemon off;"]
+                    EOF
+
+                    docker build -t ${APP_NAME}:${IMAGE_TAG} .
+                '''
             }
         }
 
         stage('Deploy to Dev Server') {
             steps {
-                script {
-                    echo "Deploying Docker container to Dev Server..."
-                    sshagent (credentials: ["${SSH_CRED}"]) {
-                        sh """
-                        scp -o StrictHostKeyChecking=no $(docker save ${IMAGE_NAME}:${IMAGE_TAG} | gzip > /tmp/${IMAGE_NAME}.tar.gz) ${DEV_SERVER}:/tmp/
-                        ssh -o StrictHostKeyChecking=no ${DEV_SERVER} 'docker load < /tmp/${IMAGE_NAME}.tar.gz'
-                        ssh -o StrictHostKeyChecking=no ${DEV_SERVER} '
-                            docker stop ${IMAGE_NAME} || true &&
-                            docker rm ${IMAGE_NAME} || true &&
-                            docker run -d --name ${IMAGE_NAME} -p 80:80 ${IMAGE_NAME}:${IMAGE_TAG}
-                        '
-                        """
-                    }
+                echo "🚀 Deploying to Dev Server (${DEV_SERVER})..."
+
+                // Use Jenkins SSH credentials named 'lubuntukey'
+                sshagent (credentials: ['lubuntukey']) {
+                    sh '''
+                        # Transfer docker image
+                        docker save ${APP_NAME}:${IMAGE_TAG} | bzip2 | ssh -o StrictHostKeyChecking=no root@${DEV_SERVER} 'bunzip2 | docker load'
+
+                        # Stop old container & start new one
+                        ssh -o StrictHostKeyChecking=no root@${DEV_SERVER} "
+                            docker stop ${APP_NAME} || true
+                            docker rm ${APP_NAME} || true
+                            docker run -d --name ${APP_NAME} -p ${HOST_PORT}:80 ${APP_NAME}:${IMAGE_TAG}
+                        "
+                    '''
                 }
             }
         }
@@ -50,7 +75,7 @@ pipeline {
 
     post {
         success {
-            echo "✅ Dev deployment successful at http://${DEV_SERVER}"
+            echo "✅ Successfully deployed to Dev (${DEV_SERVER})!"
         }
         failure {
             echo "❌ Deployment failed!"
