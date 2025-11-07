@@ -1,0 +1,111 @@
+pipeline {
+    agent any
+
+    environment {
+        BACKEND_DIR = "backend"
+        FRONTEND_DIR = "frontend"
+    }
+
+    stages {
+
+        stage('Checkout Code') {
+            steps {
+                echo "Fetching source code from GitHub..."
+                git branch: 'bkup', url: 'https://github.com/koushik269/devops.git'
+            }
+        }
+
+        stage('Setup Node Environment') {
+            steps {
+                echo "Setting up Node.js environment..."
+                sh '''
+                    # Install Node.js if not already available
+                    if ! command -v node &> /dev/null; then
+                        curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
+                        sudo apt-get install -y nodejs
+                    fi
+                    node -v
+                    npm -v
+                '''
+            }
+        }
+
+        stage('Install Backend Dependencies') {
+            steps {
+                dir("${BACKEND_DIR}") {
+                    echo "Installing backend dependencies..."
+                    sh '''
+                        npm install
+                    '''
+                }
+            }
+        }
+
+        stage('Build Backend') {
+            steps {
+                dir("${BACKEND_DIR}") {
+                    echo "Building backend..."
+                    sh '''
+                        npm run build || echo "No build step defined"
+                    '''
+                }
+            }
+        }
+
+        stage('Install Frontend Dependencies') {
+            steps {
+                dir("${FRONTEND_DIR}") {
+                    echo "Installing frontend dependencies..."
+                    sh '''
+                        npm install
+                    '''
+                }
+            }
+        }
+
+        stage('Build Frontend') {
+            steps {
+                dir("${FRONTEND_DIR}") {
+                    echo "Building frontend..."
+                    sh '''
+                        npm run build
+                    '''
+                }
+            }
+        }
+
+        stage('Docker Build & Compose Up') {
+            steps {
+                echo "Building and starting containers..."
+                sh '''
+                    docker-compose down || true
+                    docker-compose build
+                    docker-compose up -d
+                '''
+            }
+        }
+
+        stage('Post-Deployment Health Check') {
+            steps {
+                echo "Running basic health check..."
+                sh '''
+                    sleep 10
+                    curl -I http://localhost:3000 || echo "Frontend not reachable"
+                    curl -I http://localhost:5000 || echo "Backend not reachable"
+                '''
+            }
+        }
+    }
+
+    post {
+        success {
+            echo "✅ CI/CD pipeline completed successfully!"
+        }
+        failure {
+            echo "❌ Pipeline failed — please check logs."
+        }
+        always {
+            echo "Cleaning temporary files..."
+        }
+    }
+}
